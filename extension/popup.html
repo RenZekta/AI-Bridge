@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>AI Bridge</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <h1>AI Bridge</h1>
+          <p id="status" class="status">Checking local bridge…</p>
+        </div>
+        <div class="header-actions">
+          <button id="pause" class="pause" type="button">Pause</button>
+          <span id="dot" class="dot"></span>
+        </div>
+      </header>
+
+      <label>
+        Local server URL
+        <input id="serverUrl" type="url" spellcheck="false" placeholder="http://127.0.0.1:4317">
+      </label>
+      <label>
+        Bridge token
+        <input id="token" type="password" spellcheck="false" placeholder="Paste token printed by npm start">
+      </label>
+      <label>
+        Default provider
+        <select id="defaultProvider"></select>
+      </label>
+
+      <div class="actions">
+        <button id="save" class="primary">Save &amp; connect</button>
+        <button id="reconnect" class="secondary">Reconnect</button>
+      </div>
+
+      <section>
+        <h2>Open a provider</h2>
+        <div id="providers" class="providers"></div>
+      </section>
+      <p class="hint">Keep one logged-in provider tab open. Requests run one at a time and are sent only through your local bridge.</p>
+      <p id="error" class="error" hidden></p>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

@@ -1,0 +1,48 @@
+{
+  "manifest_version": 3,
+  "name": "AI Bridge",
+  "version": "0.3.0",
+  "minimum_chrome_version": "116",
+  "description": "Makes logged-in AI chat tabs available through a local OpenAI-compatible endpoint.",
+  "permissions": ["storage", "tabs"],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "http://localhost/*",
+    "https://grok.com/*",
+    "https://gemini.google.com/*",
+    "https://chat.deepseek.com/*",
+    "https://www.perplexity.ai/*",
+    "https://chat.qwen.ai/*",
+    "https://chat.qwenlm.ai/*",
+    "https://chatgpt.com/*",
+    "https://claude.ai/*",
+    "https://chat.z.ai/*",
+    "https://www.kimi.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "AI Bridge",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://grok.com/*",
+        "https://gemini.google.com/*",
+        "https://chat.deepseek.com/*",
+        "https://www.perplexity.ai/*",
+        "https://chat.qwen.ai/*",
+        "https://chat.qwenlm.ai/*",
+        "https://chatgpt.com/*",
+        "https://claude.ai/*",
+        "https://chat.z.ai/*",
+        "https://www.kimi.com/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

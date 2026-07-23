@@ -1,0 +1,4 @@
+node_modules/
+.env
+.ai-bridge-token
+npm-debug.log*
