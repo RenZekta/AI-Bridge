@@ -5,24 +5,40 @@ import process from "node:process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { URL } from "node:url";
+import {
+  DEFAULT_PROMPT_INSTRUCTION_SETTINGS,
+  PROVIDER_DISPLAY_NAMES,
+  buildPromptWithInstructions,
+  ensurePromptInstructionsLayout,
+} from "./prompt-instructions.mjs";
+import { makeAssistantMessage } from "./tool-calls.mjs";
 
 const MAX_BODY_BYTES = 1_000_000;
 const MAX_QUEUE_LENGTH = 10;
 const REQUEST_TIMEOUT_MS = 240_000;
 const PROVIDERS = ["auto", "grok", "gemini", "deepseek", "perplexity", "qwen", "chatgpt", "claude", "zai", "kimi"];
+if (PROVIDERS.slice(1).some((provider) => !PROVIDER_DISPLAY_NAMES[provider])) {
+  throw new Error("PROVIDER_DISPLAY_NAMES is missing a provider from PROVIDERS.");
+}
 const DEFAULT_BRIDGE_SETTINGS = Object.freeze({
   interceptTitleRequests: true,
+  ...DEFAULT_PROMPT_INSTRUCTION_SETTINGS,
 });
 
 const args = parseArgs(process.argv.slice(2));
 const port = readPort(args.port ?? process.env.BRIDGE_PORT ?? "4317");
 const tokenConfig = resolveBridgeToken(args);
 const settingsConfig = loadBridgeSettings(args);
+const promptInstructionsDir = resolvePromptInstructionsDirectory(args, settingsConfig.path);
 const bridgeToken = tokenConfig.token;
 const apiKey = args.apiKey ?? process.env.BRIDGE_API_KEY ?? "";
 const interceptTitleRequests = process.env.BRIDGE_INTERCEPT_TITLES === undefined
   ? settingsConfig.settings.interceptTitleRequests
   : process.env.BRIDGE_INTERCEPT_TITLES !== "0";
+const injectPromptInstructionsEveryMessage = settingsConfig.settings.injectPromptInstructionsEveryMessage;
+const prePromptName = settingsConfig.settings.prePrompt;
+const postPromptName = settingsConfig.settings.postPrompt;
+const disguiseModelNameAsAssistant = settingsConfig.settings.disguiseModelNameAsAssistant;
 
 const clients = new Set();
 const jobs = new Map();
@@ -120,6 +136,7 @@ server.listen(port, "127.0.0.1", () => {
   log(`Bridge token: ${bridgeToken}`);
   if (tokenConfig.path) log(`Bridge token file: ${tokenConfig.path}`);
   log(`Settings file: ${settingsConfig.path}`);
+  log(`Prompt instructions: ${promptInstructionsDir}`);
   if (!apiKey) log("API key authentication is disabled (loopback-only mode).");
   else log("API key authentication is enabled.");
 });
@@ -141,13 +158,29 @@ function handleChatCompletion(request, response, payload) {
     return sendOpenAiError(response, 429, "AI Bridge queue is full. Try again shortly.", "rate_limit_error");
   }
 
+  const provider = providerForModel(payload.model);
+  const tools = Array.isArray(payload.tools) ? payload.tools : [];
+  const prompt = buildPromptWithInstructions(
+    formatPrompt(payload.messages, tools),
+    payload.messages,
+    provider,
+    {
+      everyMessage: injectPromptInstructionsEveryMessage,
+      prePromptName,
+      postPromptName,
+      rootDirectory: promptInstructionsDir,
+      disguiseModelNameAsAssistant,
+    },
+  );
   const job = {
     id: `bridge-${crypto.randomUUID()}`,
     model: typeof payload.model === "string" && payload.model ? payload.model : "bridge-auto",
-    provider: providerForModel(payload.model),
-    prompt: formatPrompt(payload.messages, payload.tools),
-    hasTools: Array.isArray(payload.tools) && payload.tools.length > 0,
+    provider,
+    prompt,
+    tools,
+    hasTools: tools.length > 0,
     stream: payload.stream === true,
+    streamedContent: false,
     response,
     text: "",
     timer: null,
@@ -260,13 +293,14 @@ function handleExtensionMessage(client, message) {
     const text = typeof message.text === "string" ? message.text : "";
     if (!text) return;
     job.text += text;
-    if (job.stream) writeChunk(job, text);
+    // When tools are present, buffer until complete so we can lift JSON into tool_calls
+    // instead of streaming it as ordinary assistant content the IDE will ignore.
+    if (job.stream && !job.hasTools) writeChunk(job, text);
     return;
   }
   if (message.type === "bridge:complete") {
-    if (typeof message.text === "string" && message.text && !job.text) {
-      job.text = message.text;
-      if (job.stream) writeChunk(job, job.text);
+    if (typeof message.text === "string" && message.text) {
+      if (!job.text || message.text.length >= job.text.length) job.text = message.text;
     }
     finishJob(job);
     return;
@@ -284,11 +318,9 @@ function finishJob(job) {
   if (activeJob === job) activeJob = null;
 
   if (job.stream) {
-    writeSse(job.response, makeStreamChunk(job, {}, "stop"));
-    writeSse(job.response, "[DONE]");
-    job.response.end();
+    finishStreamingJob(job);
   } else {
-    const message = makeAssistantMessage(job.text, job.hasTools);
+    const message = makeAssistantMessage(job.text, job.tools);
     sendJson(job.response, 200, {
       id: `chatcmpl-${crypto.randomUUID()}`,
       object: "chat.completion",
@@ -298,6 +330,32 @@ function finishJob(job) {
     });
   }
   dispatchNext();
+}
+
+function finishStreamingJob(job) {
+  if (job.hasTools) {
+    const message = makeAssistantMessage(job.text, job.tools);
+    if (message.tool_calls) {
+      const call = message.tool_calls[0];
+      writeSse(job.response, makeStreamChunk(job, {
+        tool_calls: [{
+          index: 0,
+          id: call.id,
+          type: "function",
+          function: { name: call.function.name, arguments: call.function.arguments },
+        }],
+      }, null));
+      writeSse(job.response, makeStreamChunk(job, {}, "tool_calls"));
+      writeSse(job.response, "[DONE]");
+      job.response.end();
+      return;
+    }
+  }
+
+  if (!job.streamedContent && job.text) writeChunk(job, job.text);
+  writeSse(job.response, makeStreamChunk(job, {}, "stop"));
+  writeSse(job.response, "[DONE]");
+  job.response.end();
 }
 
 function finishJobWithError(job, message) {
@@ -333,10 +391,12 @@ function startStreamingResponse(job) {
     "X-Accel-Buffering": "no",
   });
   job.response.flushHeaders?.();
-  writeSse(job.response, makeStreamChunk(job, { role: "assistant", content: "" }, null));
+  // Avoid committing to content:"" when tools may produce tool_calls instead.
+  writeSse(job.response, makeStreamChunk(job, job.hasTools ? { role: "assistant" } : { role: "assistant", content: "" }, null));
 }
 
 function writeChunk(job, text) {
+  job.streamedContent = true;
   writeSse(job.response, makeStreamChunk(job, { content: text }, null));
 }
 
@@ -348,32 +408,6 @@ function makeStreamChunk(job, delta, finishReason) {
     model: job.model,
     choices: [{ index: 0, delta, finish_reason: finishReason }],
   };
-}
-
-function makeAssistantMessage(text, hasTools) {
-  if (!hasTools) return { role: "assistant", content: text };
-  const toolCall = parseToolCall(text);
-  if (!toolCall) return { role: "assistant", content: text };
-  return {
-    role: "assistant",
-    content: null,
-    tool_calls: [{
-      id: `call_${crypto.randomUUID().replaceAll("-", "").slice(0, 24)}`,
-      type: "function",
-      function: { name: toolCall.name, arguments: JSON.stringify(toolCall.arguments ?? {}) },
-    }],
-  };
-}
-
-function parseToolCall(text) {
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1] ?? text;
-  try {
-    const value = JSON.parse(fenced.trim());
-    if (value && typeof value.name === "string" && (value.arguments === undefined || typeof value.arguments === "object")) return value;
-  } catch {
-    // A normal model response is not a tool call.
-  }
-  return null;
 }
 
 function formatPrompt(messages, tools) {
@@ -397,9 +431,17 @@ function contentToText(content) {
 }
 
 function providerForModel(model) {
-  const value = typeof model === "string" ? model.toLowerCase() : "";
-  const found = PROVIDERS.slice(1).find((provider) => value === provider || value === `bridge-${provider}` || value.includes(`bridge-${provider}`));
-  return found && found !== "auto" ? found : null;
+  const value = typeof model === "string" ? model.toLowerCase().trim() : "";
+  if (!value || value === "auto" || value === "bridge-auto") return null;
+  const found = PROVIDERS.slice(1).find((provider) => (
+    value === provider
+    || value === `bridge-${provider}`
+    || value.includes(`bridge-${provider}`)
+    || value === `bridge_${provider}`
+    || value.startsWith(`${provider}-`)
+    || value.startsWith(`${provider}_`)
+  ));
+  return found ?? null;
 }
 
 function selectClient(provider) {
@@ -610,11 +652,26 @@ function loadBridgeSettings(options) {
         interceptTitleRequests: typeof parsed.interceptTitleRequests === "boolean"
           ? parsed.interceptTitleRequests
           : DEFAULT_BRIDGE_SETTINGS.interceptTitleRequests,
+        injectPromptInstructionsEveryMessage: typeof parsed.injectPromptInstructionsEveryMessage === "boolean"
+          ? parsed.injectPromptInstructionsEveryMessage
+          : DEFAULT_BRIDGE_SETTINGS.injectPromptInstructionsEveryMessage,
+        prePrompt: readOptionalSettingsString(parsed.prePrompt, DEFAULT_BRIDGE_SETTINGS.prePrompt, "prePrompt"),
+        postPrompt: readOptionalSettingsString(parsed.postPrompt, DEFAULT_BRIDGE_SETTINGS.postPrompt, "postPrompt"),
+        disguiseModelNameAsAssistant: typeof parsed.disguiseModelNameAsAssistant === "boolean"
+          ? parsed.disguiseModelNameAsAssistant
+          : DEFAULT_BRIDGE_SETTINGS.disguiseModelNameAsAssistant,
       },
     };
   } catch (error) {
     if (error?.code !== "ENOENT") throw new Error(`Could not load settings file at ${settingsPath}: ${error.message}`);
-    const contents = `${JSON.stringify(DEFAULT_BRIDGE_SETTINGS, null, 2)}\n`;
+    const contents = `${JSON.stringify({
+      interceptTitleRequests: DEFAULT_BRIDGE_SETTINGS.interceptTitleRequests,
+      injectPromptInstructionsEveryMessage: DEFAULT_BRIDGE_SETTINGS.injectPromptInstructionsEveryMessage,
+      prePrompt: DEFAULT_BRIDGE_SETTINGS.prePrompt,
+      postPrompt: DEFAULT_BRIDGE_SETTINGS.postPrompt,
+      "// disguiseModelNameAsAssistant": "Turning on may increase responsiveness of a model to the prompt",
+      disguiseModelNameAsAssistant: DEFAULT_BRIDGE_SETTINGS.disguiseModelNameAsAssistant,
+    }, null, 2)}\n`;
     try {
       fs.writeFileSync(settingsPath, contents, { encoding: "utf8", flag: "wx" });
     } catch (writeError) {
@@ -622,6 +679,20 @@ function loadBridgeSettings(options) {
     }
     return loadBridgeSettings({ "settings-file": settingsPath });
   }
+}
+
+function resolvePromptInstructionsDirectory(options, settingsPath) {
+  const configured = options.promptInstructionsDir
+    ?? options["prompt-instructions-dir"]
+    ?? process.env.BRIDGE_PROMPT_INSTRUCTIONS_DIR
+    ?? path.join(path.dirname(settingsPath), "prompt-instructions");
+  return ensurePromptInstructionsLayout(path.resolve(configured));
+}
+
+function readOptionalSettingsString(value, fallback, key) {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value !== "string") throw new Error(`'${key}' must be a string`);
+  return value.trim();
 }
 
 function readTokenFile(tokenPath) {
