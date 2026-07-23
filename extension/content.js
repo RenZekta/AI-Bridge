@@ -1,18 +1,6 @@
 const PROVIDER = detectProvider(location.hostname);
 let runningRequest = null;
 
-const PROVIDER_DISPLAY_NAMES = {
-  grok: "Grok",
-  gemini: "Gemini",
-  deepseek: "DeepSeek",
-  perplexity: "Perplexity",
-  qwen: "Qwen",
-  chatgpt: "ChatGPT",
-  claude: "Claude",
-  zai: "Z.ai",
-  kimi: "Kimi",
-};
-
 const SITE_CONFIG = {
   grok: {
     input: ["textarea", "[contenteditable='true'][role='textbox']", "[contenteditable='true']"],
@@ -74,7 +62,7 @@ async function runRequest({ id, prompt }) {
     const previousText = latestResponseText(config);
     const composer = findVisible(config.input);
     if (!composer) throw new Error("Could not find the chat composer. Make sure the page is fully loaded and you are signed in.");
-    setComposerText(composer, resolvePromptModelName(prompt));
+    setComposerText(composer, prompt);
     await delay(80);
     if (!clickSendButton()) {
       composer.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true, cancelable: true }));
@@ -84,12 +72,6 @@ async function runRequest({ id, prompt }) {
   } finally {
     runningRequest = null;
   }
-}
-
-function resolvePromptModelName(prompt) {
-  if (typeof prompt !== "string" || !prompt.includes("{{modelName}}")) return prompt;
-  const modelName = PROVIDER_DISPLAY_NAMES[PROVIDER] ?? PROVIDER ?? "the assistant";
-  return prompt.replaceAll("{{modelName}}", modelName);
 }
 
 function setComposerText(element, text) {

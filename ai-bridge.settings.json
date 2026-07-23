@@ -1,8 +1,3 @@
 {
-  "interceptTitleRequests": true,
-  "injectPromptInstructionsEveryMessage": true,
-  "prePrompt": "Generic Pre-prompt",
-  "postPrompt": "Generic Post-prompt",
-  "// disguiseModelNameAsAssistant": "Turning on may increase responsiveness of a model to the prompt",
-  "disguiseModelNameAsAssistant": false
+  "interceptTitleRequests": true
 }
