@@ -23,7 +23,7 @@ This project borrows the practical idea of a web-chat-to-OpenAI gateway from [ge
 ## Install
 
 1. Install Node.js 20 or newer.
-2. From this directory, start the local companion:
+2. From this directory, run the start the local companion with Run.bat or:
 
    ```powershell
    npm start
