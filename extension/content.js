@@ -31,8 +31,8 @@ const SITE_CONFIG = {
     output: ["[class*='answer'] .prose", "[class*='prose']", "[data-testid*='answer']"],
   },
   qwen: {
-    input: ["textarea", "[contenteditable='true'][role='textbox']", "[contenteditable='true']"],
-    output: ["[class*='message-content']", ".markdown-body", "[class*='markdown']"],
+    input: ["textarea", "[contenteditable='true'][role='textbox']", "[contenteditable='true']", ".chat-input textarea"],
+    output: ["[class*='message-content']", ".markdown-body", "[class*='markdown']", "[class*='answer']"],
   },
   chatgpt: {
     input: ["#prompt-textarea", "textarea", "[contenteditable='true'][role='textbox']"],
@@ -73,7 +73,12 @@ async function runRequest({ id, prompt }) {
     const config = SITE_CONFIG[PROVIDER];
     const previousText = latestResponseText(config);
     const composer = findVisible(config.input);
-    if (!composer) throw new Error("Could not find the chat composer. Make sure the page is fully loaded and you are signed in.");
+    if (!composer) {
+      if (PROVIDER === "qwen" && document.querySelector("a[href*='login'], button[data-testid*='login']")) {
+        throw new Error("Could not find the Qwen composer. Sign in and fully load the page.");
+      }
+      throw new Error("Could not find the chat composer. Make sure the page is fully loaded and you are signed in.");
+    }
     setComposerText(composer, resolvePromptModelName(prompt));
     await delay(80);
     if (!clickSendButton()) {
@@ -134,6 +139,9 @@ async function streamLatestResponse(id, config, beforeText) {
     const generating = isGenerating();
     sawGenerating ||= generating;
     const current = latestResponseText(config);
+    if (PROVIDER === "qwen" && /rate limit|too many requests|try again later/i.test(current ?? "")) {
+      throw new Error(`Qwen rate limit or error: ${current.slice(0, 200)}`);
+    }
     if (current && current !== beforeText) {
       sawResponse = true;
       const delta = current.startsWith(lastText) ? current.slice(lastText.length) : current;
