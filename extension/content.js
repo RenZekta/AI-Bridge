@@ -31,8 +31,11 @@ const SITE_CONFIG = {
     output: ["[class*='answer'] .prose", "[class*='prose']", "[data-testid*='answer']"],
   },
   qwen: {
-    input: ["textarea", "[contenteditable='true'][role='textbox']", "[contenteditable='true']"],
-    output: ["[class*='message-content']", ".markdown-body", "[class*='markdown']"],
+    input: ["textarea.message-input-textarea", "[contenteditable='true'][role='textbox']", "textarea"],
+    // Assistant turns only. "[class*='message-content']" also matches the user's own
+    // .user-message-content, and latestResponseText() takes the last match in DOM order,
+    // which right after submission is the prompt just sent rather than the reply.
+    output: [".response-message-content"],
   },
   chatgpt: {
     input: ["#prompt-textarea", "textarea", "[contenteditable='true'][role='textbox']"],
@@ -136,8 +139,14 @@ async function streamLatestResponse(id, config, beforeText) {
     const current = latestResponseText(config);
     if (current && current !== beforeText) {
       sawResponse = true;
-      const delta = current.startsWith(lastText) ? current.slice(lastText.length) : current;
-      if (delta && !config.streamFinalOnly) report({ type: "bridge:chunk", id, text: delta });
+      // Emit only a true increment. When the markdown re-renders retroactively (an
+      // unclosed code fence closing, for example) the new snapshot no longer starts
+      // with the previous one, and resending it whole would duplicate earlier chunks.
+      // bridge:complete carries the authoritative text in that case.
+      if (current.startsWith(lastText)) {
+        const delta = current.slice(lastText.length);
+        if (delta && !config.streamFinalOnly) report({ type: "bridge:chunk", id, text: delta });
+      }
       if (current !== lastText) lastChangeAt = Date.now();
       lastText = current;
     }
@@ -249,9 +258,31 @@ function renderMarkdownNode(node) {
 
 function renderCodeBlock(node) {
   const code = node.querySelector("code");
-  const source = (code ?? node).textContent.replace(/^\n+|\n+$/g, "");
-  const language = [...(code?.classList ?? [])].find((name) => name.startsWith("language-"))?.slice("language-".length) ?? "";
-  return `\n\n\`\`\`${language}\n${source}\n\`\`\`\n\n`;
+  if (code) {
+    const source = code.textContent.replace(/^\n+|\n+$/g, "");
+    const language = [...code.classList].find((name) => name.startsWith("language-"))?.slice("language-".length) ?? "";
+    return `\n\n\`\`\`${language}\n${source}\n\`\`\`\n\n`;
+  }
+
+  // Editor-backed blocks (Monaco, used by Qwen) put each line in an absolutely
+  // positioned .view-line row, with the language label and the line-number gutter in
+  // separate chrome. textContent of the whole node merges label + gutter + code onto
+  // one line, so read the rows directly and keep the line breaks. Rows are sorted by
+  // their offset because they are positioned rather than laid out in flow.
+  const viewLines = [...node.querySelectorAll(".view-lines .view-line")]
+    .map((line) => ({ line, top: Number.parseFloat(line.style.top) || 0 }))
+    .sort((left, right) => left.top - right.top)
+    .map((item) => item.line.textContent);
+  if (viewLines.length > 0) {
+    const language = node.querySelector("[class*='code-header']")?.textContent?.trim().split("\n")[0].toLowerCase() ?? "";
+    const source = viewLines.join("\n").replace(/^\n+|\n+$/g, "");
+    return `\n\n\`\`\`${language}\n${source}\n\`\`\`\n\n`;
+  }
+
+  // Monaco virtualizes: only lines inside the editor viewport exist in the DOM, so a
+  // block taller than the viewport yields a truncated source here.
+  const source = node.textContent.replace(/^\n+|\n+$/g, "");
+  return `\n\n\`\`\`\n${source}\n\`\`\`\n\n`;
 }
 
 function renderList(list, ordered) {
