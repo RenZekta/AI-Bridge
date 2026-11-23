@@ -11,6 +11,7 @@ export const PROVIDER_DISPLAY_NAMES = Object.freeze({
   claude: "Claude",
   zai: "Z.ai",
   kimi: "Kimi",
+  arena: "Arena",
 });
 
 export const DEFAULT_PROMPT_INSTRUCTION_SETTINGS = Object.freeze({

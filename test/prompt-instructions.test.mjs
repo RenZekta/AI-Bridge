@@ -13,7 +13,7 @@ import {
   wrapWithPromptInstructions,
 } from "../prompt-instructions.mjs";
 
-const SITE_PROVIDERS = ["grok", "gemini", "deepseek", "perplexity", "qwen", "chatgpt", "claude", "zai", "kimi"];
+const SITE_PROVIDERS = ["grok", "gemini", "deepseek", "perplexity", "qwen", "chatgpt", "claude", "zai", "kimi", "arena"];
 
 test("every provider has a display name", () => {
   assert.deepStrictEqual([...SITE_PROVIDERS].sort(), [...Object.keys(PROVIDER_DISPLAY_NAMES)].sort());

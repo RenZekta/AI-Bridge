@@ -11,6 +11,7 @@ const PROVIDER_DISPLAY_NAMES = {
   claude: "Claude",
   zai: "Z.ai",
   kimi: "Kimi",
+  arena: "Arena",
 };
 
 const SITE_CONFIG = {
@@ -53,6 +54,14 @@ const SITE_CONFIG = {
   kimi: {
     input: ["textarea", "[contenteditable='true'][role='textbox']", "[contenteditable='true']"],
     output: ["[class*='markdown']", "[class*='message-content']", ".markdown-body"],
+  },
+  arena: {
+    // NOT yet verified against the live site. These are generic guesses. Confirm the
+    // composer and, above all, the assistant-turn container against the real DOM before
+    // trusting this adapter: an output selector that also matches the user's own turn
+    // makes the bridge echo the prompt back instead of the reply (see qwen above).
+    input: ["[contenteditable='true'][role='textbox']", "textarea", "[contenteditable='true']"],
+    output: ["[class*='markdown']"],
   },
 };
 
@@ -360,6 +369,7 @@ function detectProvider(host) {
   if (host.endsWith("claude.ai")) return "claude";
   if (host.endsWith("chat.z.ai")) return "zai";
   if (host.endsWith("www.kimi.com") || host.endsWith("kimi.com")) return "kimi";
+  if (host === "arena.ai" || host.endsWith(".arena.ai")) return "arena";
   return null;
 }
 

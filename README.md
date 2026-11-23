@@ -17,6 +17,7 @@ IDE / agent ──HTTP──> 127.0.0.1:4317/v1 ──WebSocket──> Chrome ex
 - [Claude](https://claude.ai/)
 - [Z.ai](https://chat.z.ai/)
 - [Kimi](https://www.kimi.com/)
+- [Arena](https://arena.ai/) — **experimental**: routing and permissions are wired up, but the composer and response selectors have not been verified against the live site yet
 
 This project borrows the practical idea of a web-chat-to-OpenAI gateway from [geminiweb-as-api](https://github.com/hieonn/geminiweb-as-api) and the extension-first direction of [Quarkonix](https://github.com/nikita-nikita12308/Quarkonix), without copying browser profiles or exposing a remote server.
 
@@ -53,6 +54,7 @@ Use `bridge-auto` to route to the configured default provider, or select one exp
 bridge-grok       bridge-gemini     bridge-deepseek
 bridge-perplexity bridge-qwen       bridge-chatgpt
 bridge-claude     bridge-zai        bridge-kimi
+bridge-arena
 ```
 
 The local endpoint implements `GET /v1/models`, `POST /v1/chat/completions`, including Server-Sent Events when `stream: true`, and `GET /health`.
@@ -138,7 +140,7 @@ prompt-instructions/
 - File uploads, images, provider-specific citations, and native tool execution are outside the first version. When the IDE sends a `tools` array, the bridge best-effort detects JSON tool-call text from the chat tab (bare, fenced, or prose-wrapped) and returns OpenAI `tool_calls` for both streaming and non-streaming requests.
 - Claude responses are intentionally emitted once its final response block is stable, rather than streaming its intermediate thinking/status blocks into the IDE.
 - Keep the requested provider page fully loaded. If a request says the content script is not ready, reload that tab.
-- The extension has permissions only for the nine named chat websites and localhost; it does not have broad `<all_urls>` access.
+- The extension has permissions only for the ten named chat websites and localhost; it does not have broad `<all_urls>` access.
 
 ## Development
 

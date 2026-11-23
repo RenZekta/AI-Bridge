@@ -17,7 +17,9 @@
     "https://chatgpt.com/*",
     "https://claude.ai/*",
     "https://chat.z.ai/*",
-    "https://www.kimi.com/*"
+    "https://www.kimi.com/*",
+    "https://arena.ai/*",
+    "https://www.arena.ai/*"
   ],
   "background": {
     "service_worker": "background.js",
@@ -39,7 +41,9 @@
         "https://chatgpt.com/*",
         "https://claude.ai/*",
         "https://chat.z.ai/*",
-        "https://www.kimi.com/*"
+        "https://www.kimi.com/*",
+        "https://arena.ai/*",
+        "https://www.arena.ai/*"
       ],
       "js": ["content.js"],
       "run_at": "document_idle"

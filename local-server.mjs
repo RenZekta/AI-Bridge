@@ -22,7 +22,7 @@ const REQUEST_TIMEOUT_MS = 240_000;
 const MAX_CONCURRENT_PER_CLIENT = readPositiveInt(process.env.BRIDGE_MAX_CONCURRENT, 3);
 const MAX_BUSY_RETRIES = 3;
 const BUSY_RETRY_DELAY_MS = 1_500;
-const PROVIDERS = ["auto", "grok", "gemini", "deepseek", "perplexity", "qwen", "chatgpt", "claude", "zai", "kimi"];
+const PROVIDERS = ["auto", "grok", "gemini", "deepseek", "perplexity", "qwen", "chatgpt", "claude", "zai", "kimi", "arena"];
 if (PROVIDERS.slice(1).some((provider) => !PROVIDER_DISPLAY_NAMES[provider])) {
   throw new Error("PROVIDER_DISPLAY_NAMES is missing a provider from PROVIDERS.");
 }
