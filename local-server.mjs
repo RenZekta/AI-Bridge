@@ -44,6 +44,8 @@ const interceptTitleRequests = process.env.BRIDGE_INTERCEPT_TITLES === undefined
 const injectPromptInstructionsEveryMessage = settingsConfig.settings.injectPromptInstructionsEveryMessage;
 const prePromptName = settingsConfig.settings.prePrompt;
 const postPromptName = settingsConfig.settings.postPrompt;
+const webPrePromptName = settingsConfig.settings.webPrePrompt;
+const webPostPromptName = settingsConfig.settings.webPostPrompt;
 const disguiseModelNameAsAssistant = settingsConfig.settings.disguiseModelNameAsAssistant;
 
 const clients = new Set();
@@ -165,11 +167,15 @@ function handleChatCompletion(request, response, payload) {
     return sendOpenAiError(response, 429, "AI Bridge queue is full. Try again shortly.", "rate_limit_error");
   }
 
+  const promptMode = readPromptMode(request);
+  if (!promptMode) {
+    return sendOpenAiError(response, 400, "'X-AI-Bridge-Mode' must be 'ide' or 'web'.", "invalid_request_error", "x-ai-bridge-mode");
+  }
   const provider = providerForModel(payload.model);
   const tools = Array.isArray(payload.tools) ? payload.tools : [];
-  const promptSettings = resolvePromptSettings(provider);
+  const promptSettings = resolvePromptSettings(provider, promptMode);
   const prompt = buildPromptWithInstructions(
-    formatPrompt(payload.messages, tools),
+    formatPrompt(payload.messages, tools, promptMode === "ide"),
     payload.messages,
     provider,
     {
@@ -456,13 +462,30 @@ function makeStreamChunk(job, delta, finishReason) {
   };
 }
 
-function formatPrompt(messages, tools) {
+// Web-subagent requests reach the website as a plain message. An orchestrating agent
+// sends one turn at a time and the chat tab already holds the conversation, so role
+// labels would only show the page its own scaffolding. IDE requests keep them because
+// their payloads carry system prompts and history where the roles carry meaning.
+function formatPrompt(messages, tools, roleLabels) {
   const transcript = messages.map((message) => {
+    const content = contentToText(message.content);
+    if (!roleLabels) return content;
     const role = typeof message.role === "string" ? message.role.toUpperCase() : "USER";
-    return `${role}:\n${contentToText(message.content)}`;
+    return `${role}:\n${content}`;
   }).join("\n\n");
   if (!Array.isArray(tools) || tools.length === 0) return transcript;
   return `${transcript}\n\nAVAILABLE TOOLS (OpenAI schema):\n${JSON.stringify(tools)}\n\nIf a tool is required, reply only with a JSON object shaped like {"name":"tool_name","arguments":{...}}. Otherwise answer normally.`;
+}
+
+// The workflow is chosen per request rather than per provider: the same chat tab can
+// serve an IDE now and an orchestrating agent later, and only the dressing of the prompt
+// differs. Anything other than ide or web is rejected so a typo does not silently take
+// the wrong profile.
+function readPromptMode(request) {
+  const value = String(request.headers["x-ai-bridge-mode"] ?? "").trim().toLowerCase();
+  if (value === "" || value === "ide") return "ide";
+  if (value === "web") return "web";
+  return null;
 }
 
 function contentToText(content) {
@@ -720,6 +743,8 @@ function loadBridgeSettings(options) {
           : DEFAULT_BRIDGE_SETTINGS.injectPromptInstructionsEveryMessage,
         prePrompt: readOptionalSettingsString(parsed.prePrompt, DEFAULT_BRIDGE_SETTINGS.prePrompt, "prePrompt"),
         postPrompt: readOptionalSettingsString(parsed.postPrompt, DEFAULT_BRIDGE_SETTINGS.postPrompt, "postPrompt"),
+        webPrePrompt: readOptionalSettingsString(parsed.webPrePrompt, DEFAULT_BRIDGE_SETTINGS.webPrePrompt, "webPrePrompt"),
+        webPostPrompt: readOptionalSettingsString(parsed.webPostPrompt, DEFAULT_BRIDGE_SETTINGS.webPostPrompt, "webPostPrompt"),
         disguiseModelNameAsAssistant: typeof parsed.disguiseModelNameAsAssistant === "boolean"
           ? parsed.disguiseModelNameAsAssistant
           : DEFAULT_BRIDGE_SETTINGS.disguiseModelNameAsAssistant,
@@ -733,9 +758,11 @@ function loadBridgeSettings(options) {
       injectPromptInstructionsEveryMessage: DEFAULT_BRIDGE_SETTINGS.injectPromptInstructionsEveryMessage,
       prePrompt: DEFAULT_BRIDGE_SETTINGS.prePrompt,
       postPrompt: DEFAULT_BRIDGE_SETTINGS.postPrompt,
+      webPrePrompt: DEFAULT_BRIDGE_SETTINGS.webPrePrompt,
+      webPostPrompt: DEFAULT_BRIDGE_SETTINGS.webPostPrompt,
       "// disguiseModelNameAsAssistant": "Turning on may increase responsiveness of a model to the prompt",
       disguiseModelNameAsAssistant: DEFAULT_BRIDGE_SETTINGS.disguiseModelNameAsAssistant,
-      "// providers": "Per-provider overrides of prePrompt, postPrompt, injectPromptInstructionsEveryMessage and disguiseModelNameAsAssistant. An empty prePrompt or postPrompt disables it for that provider.",
+      "// providers": "Per-provider overrides of prePrompt, postPrompt, webPrePrompt, webPostPrompt, injectPromptInstructionsEveryMessage and disguiseModelNameAsAssistant. An empty prompt name disables it for that provider.",
       providers: {},
     }, null, 2)}\n`;
     try {
@@ -771,6 +798,8 @@ function readProviderOverrides(parsed, settingsPath) {
     }
     if (raw.prePrompt !== undefined) override.prePrompt = readOptionalSettingsString(raw.prePrompt, "", "prePrompt");
     if (raw.postPrompt !== undefined) override.postPrompt = readOptionalSettingsString(raw.postPrompt, "", "postPrompt");
+    if (raw.webPrePrompt !== undefined) override.webPrePrompt = readOptionalSettingsString(raw.webPrePrompt, "", "webPrePrompt");
+    if (raw.webPostPrompt !== undefined) override.webPostPrompt = readOptionalSettingsString(raw.webPostPrompt, "", "webPostPrompt");
     if (raw.disguiseModelNameAsAssistant !== undefined) {
       if (typeof raw.disguiseModelNameAsAssistant !== "boolean") {
         throw new Error(`'providers.${provider}.disguiseModelNameAsAssistant' must be a boolean`);
@@ -782,14 +811,19 @@ function readProviderOverrides(parsed, settingsPath) {
   return overrides;
 }
 
-// Provider-specific values win over the global ones. An empty prePrompt or postPrompt
-// is an explicit "off for this provider", so it must not fall back to the global name.
-function resolvePromptSettings(provider) {
+// Provider-specific values win over the global ones. An empty prompt name is an explicit
+// "off for this provider", so it must not fall back to the global name.
+function resolvePromptSettings(provider, promptMode) {
   const override = provider ? settingsConfig.providerOverrides[provider] ?? null : null;
+  const web = promptMode === "web";
   return {
     everyMessage: override?.injectPromptInstructionsEveryMessage ?? injectPromptInstructionsEveryMessage,
-    prePromptName: override?.prePrompt ?? prePromptName,
-    postPromptName: override?.postPrompt ?? postPromptName,
+    prePromptName: web
+      ? override?.webPrePrompt ?? webPrePromptName
+      : override?.prePrompt ?? prePromptName,
+    postPromptName: web
+      ? override?.webPostPrompt ?? webPostPromptName
+      : override?.postPrompt ?? postPromptName,
     disguiseModelNameAsAssistant: override?.disguiseModelNameAsAssistant ?? disguiseModelNameAsAssistant,
   };
 }

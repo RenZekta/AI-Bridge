@@ -16,8 +16,10 @@ export const PROVIDER_DISPLAY_NAMES = Object.freeze({
 
 export const DEFAULT_PROMPT_INSTRUCTION_SETTINGS = Object.freeze({
   injectPromptInstructionsEveryMessage: true,
-  prePrompt: "Generic Pre-prompt",
-  postPrompt: "Generic Post-prompt",
+  prePrompt: "Generic IDE Pre-prompt",
+  postPrompt: "Generic IDE Post-prompt",
+  webPrePrompt: "Web Subagent Pre-prompt",
+  webPostPrompt: "Web Subagent Post-prompt",
   // Turning on may increase responsiveness of a model to the prompt.
   disguiseModelNameAsAssistant: false,
 });
@@ -108,13 +110,17 @@ export function ensurePromptInstructionsLayout(rootDirectory) {
   fs.mkdirSync(preDir, { recursive: true });
   fs.mkdirSync(postDir, { recursive: true });
 
-  const prePath = path.join(preDir, "Generic Pre-prompt.md");
-  const postPath = path.join(postDir, "Generic Post-prompt.md");
-  if (!fs.existsSync(prePath)) {
-    fs.writeFileSync(prePath, `${DEFAULT_PRE_PROMPT_TEMPLATE}\n`, "utf8");
-  }
-  if (!fs.existsSync(postPath)) {
-    fs.writeFileSync(postPath, `${DEFAULT_POST_PROMPT_TEMPLATE}\n`, "utf8");
+  const files = [
+    [path.join(preDir, "Generic IDE Pre-prompt.md"), `${DEFAULT_PRE_PROMPT_TEMPLATE}\n`],
+    [path.join(postDir, "Generic IDE Post-prompt.md"), `${DEFAULT_POST_PROMPT_TEMPLATE}\n`],
+    // The web-subagent profile starts empty on purpose. An orchestrating agent already
+    // knows what it wants back from a website, and text written for an IDE changes the
+    // answer it is asking for.
+    [path.join(preDir, "Web Subagent Pre-prompt.md"), ""],
+    [path.join(postDir, "Web Subagent Post-prompt.md"), ""],
+  ];
+  for (const [filePath, contents] of files) {
+    if (!fs.existsSync(filePath)) fs.writeFileSync(filePath, contents, "utf8");
   }
   return rootDirectory;
 }

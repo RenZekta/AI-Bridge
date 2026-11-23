@@ -93,6 +93,7 @@ report({ type: "bridge:status", status: "ready", provider: PROVIDER, url: locati
 
 async function runRequest({ id, prompt }) {
   if (!PROVIDER) throw new Error("This page is not a supported AI chat site.");
+  if (isChallengePage()) throw new Error("Cloudflare verification is blocking this tab. Solve it in the browser, then retry.");
   runningRequest = id;
   try {
     const config = SITE_CONFIG[PROVIDER];
@@ -350,6 +351,15 @@ function cleanMarkdown(value) {
 function isGenerating() {
   return [...document.querySelectorAll("button[aria-label*='Stop' i], button[aria-label*='停止'], button[data-testid*='stop' i]")]
     .some(isVisible);
+}
+
+// A Cloudflare interstitial is a separate document, so no SITE_CONFIG selector applies
+// and the composer lookup would otherwise report the misleading "signed out" error.
+// These are Cloudflare's own markers, shared by its challenge variants.
+const CHALLENGE_PAGE_MARKERS = "#challenge-form, .cf-turnstile, #cf-chl-widget, input[name='cf-turnstile-response']";
+
+function isChallengePage() {
+  return Boolean(document.querySelector(CHALLENGE_PAGE_MARKERS)) || /^just a moment\.\.\.$/i.test(document.title.trim());
 }
 
 function findVisible(selectors) {

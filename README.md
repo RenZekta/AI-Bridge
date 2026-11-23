@@ -76,6 +76,20 @@ npm start
 
 With `BRIDGE_API_KEY` set, send `Authorization: Bearer choose-a-local-secret`.
 
+### Use from an agent
+
+An agent driving a chat tab as a sub-agent sends the same request with one extra header:
+
+```text
+X-AI-Bridge-Mode: web
+```
+
+Web-subagent mode wraps the prompt in `webPrePrompt` / `webPostPrompt` instructions instead of the IDE ones, and sends the message as plain text rather than a `USER:`-labelled transcript, so the website reads a natural request. Both web instruction files start empty.
+
+Send one message per request. The conversation lives in the browser tab, so resending history makes the site see those turns twice.
+
+The workflow is chosen per request rather than per provider because the same tab can serve an IDE now and an agent later. A value other than `ide` or `web` is rejected, so a typo cannot silently take the wrong profile.
+
 ### Bridge-token storage
 
 The bridge token is automatically stored in the ignored `.ai-bridge-token` file. Delete that file to rotate the token, then paste the newly printed value into the extension. To use a managed token without writing a file, set `BRIDGE_TOKEN`; to choose another token-file location, pass `--token-file <path>` or set `BRIDGE_TOKEN_FILE`.
@@ -94,8 +108,10 @@ If the file is missing, the server creates it with defaults on next start.
 {
   "interceptTitleRequests": true,
   "injectPromptInstructionsEveryMessage": true,
-  "prePrompt": "Generic Pre-prompt",
-  "postPrompt": "Generic Post-prompt",
+  "prePrompt": "Generic IDE Pre-prompt",
+  "postPrompt": "Generic IDE Post-prompt",
+  "webPrePrompt": "Web Subagent Pre-prompt",
+  "webPostPrompt": "Web Subagent Post-prompt",
   "// disguiseModelNameAsAssistant": "Turning on may increase responsiveness of a model to the prompt",
   "disguiseModelNameAsAssistant": false,
   "providers": {
@@ -108,7 +124,7 @@ Set `interceptTitleRequests` to `false` to pass IDE conversation-naming calls th
 
 Set `disguiseModelNameAsAssistant` to `true` to always replace `{{modelName}}` with `an assistant` instead of the provider display name. Turning this on may increase responsiveness of a model to the prompt. Keys that start with `//` are comments and are ignored.
 
-**Per-provider overrides.** The optional `providers` object is keyed by provider id (`grok`, `gemini`, `deepseek`, `perplexity`, `qwen`, `chatgpt`, `claude`, `zai`, `kimi`). Each entry may override `prePrompt`, `postPrompt`, `injectPromptInstructionsEveryMessage` and `disguiseModelNameAsAssistant` for that provider only; anything omitted falls back to the global value. An empty `prePrompt` or `postPrompt` disables that side for the provider instead of inheriting the global name, which is how you turn the relay preamble off for one site only. `interceptTitleRequests` stays global because it is decided before the provider is known. Unknown provider ids and wrong value types are rejected at startup.
+**Per-provider overrides.** The optional `providers` object is keyed by provider id (`grok`, `gemini`, `deepseek`, `perplexity`, `qwen`, `chatgpt`, `claude`, `zai`, `kimi`, `arena`). Each entry may override `prePrompt`, `postPrompt`, `webPrePrompt`, `webPostPrompt`, `injectPromptInstructionsEveryMessage` and `disguiseModelNameAsAssistant` for that provider only; anything omitted falls back to the global value. An empty prompt name disables that side for the provider instead of inheriting the global name, which is how you turn the relay preamble off for one site only. `interceptTitleRequests` stays global because it is decided before the provider is known. Unknown provider ids and wrong value types are rejected at startup.
 
 Concurrency is controlled by the environment variable `BRIDGE_MAX_CONCURRENT` (default `3`): how many requests one connected browser may have in flight at once. Set it to `1` for strictly serial behaviour.
 
@@ -119,14 +135,17 @@ Markdown files under `prompt-instructions/` are wrapped around the bridged chat 
 ```text
 prompt-instructions/
   pre-prompt/
-    Generic Pre-prompt.md
+    Generic IDE Pre-prompt.md
+    Web Subagent Pre-prompt.md
     ZCode Pre-prompt.md
   post-prompt/
-    Generic Post-prompt.md
+    Generic IDE Post-prompt.md
+    Web Subagent Post-prompt.md
     ZCode Post-prompt.md
 ```
 
-- `prePrompt` / `postPrompt` name the active file stem (with or without `.md`). Set either to `""` to disable that side.
+- `prePrompt` / `postPrompt` name the files used for IDE requests; `webPrePrompt` / `webPostPrompt` name the ones used when the request carries `X-AI-Bridge-Mode: web`. The web files ship empty, so an agent gets its prompt dressed only the way it asked.
+- Set a name to `""` to disable that side entirely.
 - Pre-prompt text is placed at the very start of the outgoing prompt; post-prompt text at the very end.
 - With `injectPromptInstructionsEveryMessage: true` (default), both are injected on every chat completion. Set it to `false` to inject only on the first user turn of a conversation (`messages` has at most one `role: "user"` entry).
 - Use `{{modelName}}` in either file for the provider display name (for example `Claude`, `Gemini`, `ChatGPT`). Prefer a provider-specific model (`bridge-claude`, …) so the server can substitute immediately; with `bridge-auto`, the placeholder is filled by the content script from the live tab hostname.

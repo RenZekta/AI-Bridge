@@ -304,15 +304,16 @@ test("lifts streamed text tool calls into OpenAI tool_calls", async (context) =>
 test("persists a generated bridge token unless one is supplied", async (context) => {
   const folder = await fs.mkdtemp(path.join(os.tmpdir(), "ai-bridge-token-"));
   const tokenFile = path.join(folder, "token");
+  const settingsFile = path.join(folder, "ai-bridge.settings.json");
   context.after(async () => fs.rm(folder, { recursive: true, force: true }));
 
-  const first = await startServerWithTokenFile(tokenFile);
+  const first = await startServerWithTokenFile(tokenFile, settingsFile);
   const firstToken = await first.token;
   first.child.kill();
   await once(first.child, "exit");
   assert.equal((await fs.readFile(tokenFile, "utf8")).trim(), firstToken);
 
-  const second = await startServerWithTokenFile(tokenFile);
+  const second = await startServerWithTokenFile(tokenFile, settingsFile);
   const secondToken = await second.token;
   second.child.kill();
   await once(second.child, "exit");
@@ -382,6 +383,73 @@ test("applies per-provider prompt-instruction overrides over the globals", async
   });
   assert.equal(gemini.status, 200);
   assert.deepEqual(runs.at(-1), { provider: "gemini", prompt: "GLOBAL PRE for Gemini\n\nUSER:\ngemini turn\n\nGLOBAL POST" });
+});
+
+test("shapes prompts differently for the web-subagent workflow", async (context) => {
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "ai-bridge-webmode-"));
+  context.after(async () => fs.rm(workspace, { recursive: true, force: true }));
+  const settingsFile = path.join(workspace, "ai-bridge.settings.json");
+  const promptRoot = path.join(workspace, "prompt-instructions");
+  await fs.mkdir(path.join(promptRoot, "pre-prompt"), { recursive: true });
+  await fs.mkdir(path.join(promptRoot, "post-prompt"), { recursive: true });
+  await fs.writeFile(path.join(promptRoot, "pre-prompt", "Ide Pre-prompt.md"), "IDE PRE", "utf8");
+  await fs.writeFile(path.join(promptRoot, "pre-prompt", "Web Pre-prompt.md"), "WEB PRE", "utf8");
+  await fs.writeFile(settingsFile, `${JSON.stringify({
+    interceptTitleRequests: false,
+    injectPromptInstructionsEveryMessage: true,
+    prePrompt: "Ide Pre-prompt",
+    postPrompt: "",
+    webPrePrompt: "Web Pre-prompt",
+    webPostPrompt: "",
+  }, null, 2)}\n`);
+
+  const port = await freePort();
+  const child = spawn(process.execPath, [
+    "local-server.mjs",
+    `--port=${port}`,
+    "--token=test-token",
+    `--settings-file=${settingsFile}`,
+    `--prompt-instructions-dir=${promptRoot}`,
+  ], { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
+  context.after(() => child.kill());
+  await once(child.stdout, "data");
+
+  const extension = new WebSocket(`ws://127.0.0.1:${port}/bridge?token=test-token`);
+  context.after(() => extension.close());
+  await new Promise((resolve, reject) => {
+    extension.addEventListener("open", resolve, { once: true });
+    extension.addEventListener("error", () => reject(new Error("Test extension WebSocket could not connect.")), { once: true });
+  });
+
+  const prompts = [];
+  extension.addEventListener("message", (event) => {
+    const message = JSON.parse(event.data);
+    if (message.type !== "bridge:run") return;
+    prompts.push(message.prompt);
+    extension.send(JSON.stringify({ type: "bridge:complete", id: message.id, text: "ok" }));
+  });
+  extension.send(JSON.stringify({ type: "bridge:hello", version: "test", providers: ["qwen"] }));
+
+  const chat = async (headers) => {
+    const response = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...headers },
+      body: JSON.stringify({ model: "bridge-qwen", messages: [{ role: "user", content: "summarise this" }] }),
+    });
+    return { status: response.status, body: await response.json() };
+  };
+
+  const ide = await chat({});
+  assert.equal(ide.status, 200);
+  assert.equal(prompts.at(-1), "IDE PRE\n\nUSER:\nsummarise this");
+
+  const web = await chat({ "x-ai-bridge-mode": "web" });
+  assert.equal(web.status, 200);
+  assert.equal(prompts.at(-1), "WEB PRE\n\nsummarise this");
+
+  const rejected = await chat({ "x-ai-bridge-mode": "webb" });
+  assert.equal(rejected.status, 400);
+  assert.equal(rejected.body.error.code, "invalid_request_error");
 });
 
 test("rejects an unknown provider id in settings providers", async (context) => {
@@ -500,9 +568,18 @@ test("honours BRIDGE_MAX_CONCURRENT=1 by serialising requests", async (context) 
   assert.equal((await gemini).choices[0].message.content, "second done");
 });
 
-async function startServerWithTokenFile(tokenFile) {
+// The settings file decides where the prompt instruction directory resolves to, so
+// leaving it out would point the server at the repository's own settings and prompts:
+// the suite would then write into the working tree and change behaviour with local
+// configuration.
+async function startServerWithTokenFile(tokenFile, settingsFile) {
   const port = await freePort();
-  const child = spawn(process.execPath, ["local-server.mjs", `--port=${port}`, "--token-file", tokenFile], { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(process.execPath, [
+    "local-server.mjs",
+    `--port=${port}`,
+    "--token-file", tokenFile,
+    `--settings-file=${settingsFile}`,
+  ], { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
   const token = new Promise((resolve, reject) => {
     let output = "";
     child.stdout.on("data", (chunk) => {

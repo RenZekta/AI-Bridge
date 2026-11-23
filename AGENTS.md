@@ -155,8 +155,13 @@ than intended.
 
 `ai-bridge.settings.json` is local per-machine configuration and git-ignored, so new
 options go in `ai-bridge.settings.example.json`, the file that documents the shape.
-`providers` holds per-provider overrides, and an empty `prePrompt` or `postPrompt`
-means "off for this provider", not "inherit".
+`providers` holds per-provider overrides, and an empty prompt name means "off for this
+provider", not "inherit".
+
+Prompt shaping has two profiles chosen per request by the `X-AI-Bridge-Mode` header:
+`ide` (default) and `web`. They wrap different instruction files, and the web profile
+sends the message as plain text instead of a `USER:`-labelled transcript, so a change to
+prompt formatting has to be checked against both.
 
 The bridge token, browser profiles and scratch directories are git-ignored too. When
 a change introduces a new kind of local state, add it to `.gitignore` in the same
@@ -175,3 +180,8 @@ It does not cover the extension's DOM code: there is no harness for `content.js`
 adapter changes are only proven by a real browser run against the live site. Say
 which kind of verification a change actually had instead of implying more than was
 done.
+
+Every spawned server needs its own `--settings-file`, because that path is also where the
+prompt instruction directory resolves to. A spawn without one falls back to the
+repository's own settings and writes generated instruction files into the working tree,
+and the result then depends on whatever the machine has configured.
