@@ -33,9 +33,10 @@ const SITE_CONFIG = {
   },
   qwen: {
     input: ["textarea.message-input-textarea", "[contenteditable='true'][role='textbox']", "textarea"],
-    // Assistant turns only. "[class*='message-content']" also matches the user's own
-    // .user-message-content, and latestResponseText() takes the last match in DOM order,
-    // which right after submission is the prompt just sent rather than the reply.
+    // Must match assistant turns only. latestResponseText() takes the last match in DOM
+    // order, and right after submission the newest element is the user's own message, so
+    // a selector broad enough to catch both makes the bridge return the prompt instead of
+    // the reply.
     output: [".response-message-content"],
   },
   chatgpt: {
@@ -56,10 +57,10 @@ const SITE_CONFIG = {
     output: ["[class*='markdown']", "[class*='message-content']", ".markdown-body"],
   },
   arena: {
-    // NOT yet verified against the live site. These are generic guesses. Confirm the
-    // composer and, above all, the assistant-turn container against the real DOM before
-    // trusting this adapter: an output selector that also matches the user's own turn
-    // makes the bridge echo the prompt back instead of the reply (see qwen above).
+    // Unverified against the live site. The output selector is the risky one: if it also
+    // matches the user's own turn, the bridge silently returns the prompt instead of the
+    // reply. Confirm the composer and the assistant-turn container in the real DOM before
+    // relying on this adapter.
     input: ["[contenteditable='true'][role='textbox']", "textarea", "[contenteditable='true']"],
     output: ["[class*='markdown']"],
   },

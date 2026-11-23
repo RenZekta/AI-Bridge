@@ -1,7 +1,7 @@
 /**
  * Best-effort conversion of plain-text model output into OpenAI tool_calls.
- * Providers only give a chat textbox — no schema-constrained decoding — so extraction
- * must tolerate fences, prose wrappers, and minor formatting drift.
+ * Providers only give a chat textbox, with no schema-constrained decoding, so
+ * extraction must tolerate fences, prose wrappers, and minor formatting drift.
  */
 
 import crypto from "node:crypto";

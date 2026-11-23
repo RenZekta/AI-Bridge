@@ -49,7 +49,7 @@ async function save() {
     if (!["http:", "https:"].includes(url.protocol)) throw new Error("Use an http:// or https:// local server URL.");
     await chrome.storage.local.set({ serverUrl: url.toString().replace(/\/$/, ""), token: token.value.trim(), defaultProvider: defaultProvider.value });
     chrome.runtime.sendMessage({ type: "bridge:reconnect" });
-    status.textContent = "Connecting…";
+    status.textContent = "Connecting...";
     dot.className = "dot pending";
   } catch (cause) {
     error.textContent = cause.message;

@@ -148,4 +148,6 @@ prompt-instructions/
 npm test
 ```
 
-The tests cover the local health endpoint, model list, title-request interception, bridge relay, streaming, heartbeats, token persistence, prompt-instruction injection, and text-to-`tool_calls` conversion.
+The tests cover the local health endpoint, model list, title-request interception, bridge relay, streaming, heartbeats, token persistence, prompt-instruction injection, per-provider settings, text-to-`tool_calls` conversion, and that every provider stays registered across the server, extension, and manifest.
+
+`AGENTS.md` records the conventions for working in this repository, including how to verify a provider's selectors against the live site before writing an adapter.

@@ -341,8 +341,8 @@ function handleExtensionMessage(client, message) {
     return;
   }
   if (message.type === "bridge:complete") {
-    // The final extraction is the ground truth for this turn. Accumulated chunks can
-    // contain re-rendered duplicates, so replace rather than keep the longer string.
+    // The final extraction is the ground truth for this turn. Chunks streamed while the
+    // page re-renders can repeat earlier text, so the complete payload replaces them.
     if (typeof message.text === "string" && message.text) job.text = message.text;
     finishJob(job);
     return;
