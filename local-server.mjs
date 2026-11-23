@@ -174,18 +174,26 @@ function handleChatCompletion(request, response, payload) {
   const provider = providerForModel(payload.model);
   const tools = Array.isArray(payload.tools) ? payload.tools : [];
   const promptSettings = resolvePromptSettings(provider, promptMode);
-  const prompt = buildPromptWithInstructions(
-    formatPrompt(payload.messages, tools, promptMode === "ide"),
-    payload.messages,
-    provider,
-    {
-      everyMessage: promptSettings.everyMessage,
-      prePromptName: promptSettings.prePromptName,
-      postPromptName: promptSettings.postPromptName,
-      rootDirectory: promptInstructionsDir,
-      disguiseModelNameAsAssistant: promptSettings.disguiseModelNameAsAssistant,
-    },
-  );
+  let prompt;
+  try {
+    prompt = buildPromptWithInstructions(
+      formatPrompt(payload.messages, tools, promptMode === "ide"),
+      payload.messages,
+      provider,
+      {
+        everyMessage: promptSettings.everyMessage,
+        prePromptName: promptSettings.prePromptName,
+        postPromptName: promptSettings.postPromptName,
+        rootDirectory: promptInstructionsDir,
+        disguiseModelNameAsAssistant: promptSettings.disguiseModelNameAsAssistant,
+      },
+    );
+  } catch (error) {
+    // A settings file naming an instruction that does not exist is a problem with this
+    // machine's configuration. Reported as 400 it reads as a malformed request and sends
+    // the caller off to inspect a payload that was fine.
+    return sendOpenAiError(response, 500, error.message, "server_error");
+  }
   const job = {
     id: `bridge-${crypto.randomUUID()}`,
     model: typeof payload.model === "string" && payload.model ? payload.model : "bridge-auto",

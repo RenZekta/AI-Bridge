@@ -452,6 +452,45 @@ test("shapes prompts differently for the web-subagent workflow", async (context)
   assert.equal(rejected.body.error.code, "invalid_request_error");
 });
 
+test("reports a missing prompt instruction file as a server error", async (context) => {
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "ai-bridge-missingprompt-"));
+  context.after(async () => fs.rm(workspace, { recursive: true, force: true }));
+  const settingsFile = path.join(workspace, "ai-bridge.settings.json");
+  const promptRoot = path.join(workspace, "prompt-instructions");
+  await fs.mkdir(path.join(promptRoot, "pre-prompt"), { recursive: true });
+  await fs.mkdir(path.join(promptRoot, "post-prompt"), { recursive: true });
+  await fs.writeFile(settingsFile, `${JSON.stringify({
+    interceptTitleRequests: false,
+    injectPromptInstructionsEveryMessage: true,
+    prePrompt: "",
+    postPrompt: "Missing Post-prompt",
+  }, null, 2)}\n`);
+
+  const port = await freePort();
+  const child = spawn(process.execPath, [
+    "local-server.mjs",
+    `--port=${port}`,
+    "--token=test-token",
+    `--settings-file=${settingsFile}`,
+    `--prompt-instructions-dir=${promptRoot}`,
+  ], { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
+  context.after(() => child.kill());
+  await once(child.stdout, "data");
+
+  const extension = await connectTestExtension(port, ["qwen"]);
+  context.after(() => extension.close());
+
+  const response = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "bridge-qwen", messages: [{ role: "user", content: "hi" }] }),
+  });
+  const body = await response.json();
+  assert.equal(response.status, 500);
+  assert.equal(body.error.code, "server_error");
+  assert.match(body.error.message, /Missing Post-prompt\.md/);
+});
+
 test("rejects an unknown provider id in settings providers", async (context) => {
   const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "ai-bridge-badprovider-"));
   context.after(async () => fs.rm(workspace, { recursive: true, force: true }));
