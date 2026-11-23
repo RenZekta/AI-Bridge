@@ -19,6 +19,7 @@ const DEFAULT_SETTINGS = {
 };
 
 const HEARTBEAT_INTERVAL_MS = 20_000;
+const RECONNECT_ALARM = "bridge-reconnect";
 let socket = null;
 let reconnectTimer = null;
 let heartbeatTimer = null;
@@ -36,6 +37,13 @@ chrome.runtime.onInstalled.addListener(async () => {
 });
 
 chrome.runtime.onStartup.addListener(connect);
+
+// A service worker can be terminated at any time and setTimeout does not survive it, so
+// a bridge that dropped while the worker slept would stay down until something else
+// happened to wake it. The alarm is what guarantees a retry.
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === RECONNECT_ALARM) connect();
+});
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
   if (changes.paused) {
@@ -83,6 +91,7 @@ chrome.tabs.onRemoved.addListener((closedTabId) => {
   }
 });
 
+chrome.alarms.create(RECONNECT_ALARM, { periodInMinutes: 1 });
 connect();
 
 async function connect(force = false) {
