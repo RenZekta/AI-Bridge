@@ -1,0 +1,17 @@
+{
+  "interceptTitleRequests": true,
+  "injectPromptInstructionsEveryMessage": true,
+  "prePrompt": "Generic Pre-prompt",
+  "postPrompt": "Generic Post-prompt",
+  "// disguiseModelNameAsAssistant": "Turning on may increase responsiveness of a model to the prompt",
+  "disguiseModelNameAsAssistant": false,
+  "// providers": "Optional per-provider overrides. Keys are provider ids: grok, gemini, deepseek, perplexity, qwen, chatgpt, claude, zai, kimi. Overridable keys: prePrompt, postPrompt, injectPromptInstructionsEveryMessage, disguiseModelNameAsAssistant. An empty prePrompt or postPrompt disables it for that provider only.",
+  "providers": {
+    "qwen": {
+      "prePrompt": ""
+    },
+    "chatgpt": {
+      "disguiseModelNameAsAssistant": true
+    }
+  }
+}

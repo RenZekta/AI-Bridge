@@ -80,7 +80,13 @@ The bridge token is automatically stored in the ignored `.ai-bridge-token` file.
 
 ### Settings
 
-`ai-bridge.settings.json` sits beside the local server and is deliberately readable and versionable:
+`ai-bridge.settings.json` sits beside the local server and is **local to your machine**: it is git-ignored so your personal configuration is never committed. Copy the example to start:
+
+```powershell
+Copy-Item ai-bridge.settings.example.json ai-bridge.settings.json
+```
+
+If the file is missing, the server creates it with defaults on next start.
 
 ```json
 {
@@ -89,13 +95,18 @@ The bridge token is automatically stored in the ignored `.ai-bridge-token` file.
   "prePrompt": "Generic Pre-prompt",
   "postPrompt": "Generic Post-prompt",
   "// disguiseModelNameAsAssistant": "Turning on may increase responsiveness of a model to the prompt",
-  "disguiseModelNameAsAssistant": false
+  "disguiseModelNameAsAssistant": false,
+  "providers": {
+    "qwen": { "prePrompt": "" }
+  }
 }
 ```
 
 Set `interceptTitleRequests` to `false` to pass IDE conversation-naming calls through to the selected AI website. The environment variable `BRIDGE_INTERCEPT_TITLES=0` overrides this setting for one run. Use `BRIDGE_SETTINGS_FILE` or `--settings-file <path>` to load a settings file from elsewhere.
 
 Set `disguiseModelNameAsAssistant` to `true` to always replace `{{modelName}}` with `an assistant` instead of the provider display name. Turning this on may increase responsiveness of a model to the prompt. Keys that start with `//` are comments and are ignored.
+
+**Per-provider overrides.** The optional `providers` object is keyed by provider id (`grok`, `gemini`, `deepseek`, `perplexity`, `qwen`, `chatgpt`, `claude`, `zai`, `kimi`). Each entry may override `prePrompt`, `postPrompt`, `injectPromptInstructionsEveryMessage` and `disguiseModelNameAsAssistant` for that provider only; anything omitted falls back to the global value. An empty `prePrompt` or `postPrompt` disables that side for the provider instead of inheriting the global name, which is how you turn the relay preamble off for one site only. `interceptTitleRequests` stays global because it is decided before the provider is known. Unknown provider ids and wrong value types are rejected at startup.
 
 ### Prompt instructions
 

@@ -290,6 +290,93 @@ test("persists a generated bridge token unless one is supplied", async (context)
   assert.equal(secondToken, firstToken);
 });
 
+test("applies per-provider prompt-instruction overrides over the globals", async (context) => {
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "ai-bridge-perprovider-"));
+  context.after(async () => fs.rm(workspace, { recursive: true, force: true }));
+  const settingsFile = path.join(workspace, "ai-bridge.settings.json");
+  const promptRoot = path.join(workspace, "prompt-instructions");
+  await fs.mkdir(path.join(promptRoot, "pre-prompt"), { recursive: true });
+  await fs.mkdir(path.join(promptRoot, "post-prompt"), { recursive: true });
+  await fs.writeFile(path.join(promptRoot, "pre-prompt", "Global Pre-prompt.md"), "GLOBAL PRE for {{modelName}}", "utf8");
+  await fs.writeFile(path.join(promptRoot, "post-prompt", "Global Post-prompt.md"), "GLOBAL POST", "utf8");
+  await fs.writeFile(path.join(promptRoot, "post-prompt", "Qwen Post-prompt.md"), "QWEN ONLY", "utf8");
+  await fs.writeFile(settingsFile, `${JSON.stringify({
+    interceptTitleRequests: false,
+    injectPromptInstructionsEveryMessage: true,
+    prePrompt: "Global Pre-prompt",
+    postPrompt: "Global Post-prompt",
+    providers: {
+      qwen: { prePrompt: "", postPrompt: "Qwen Post-prompt" },
+    },
+  }, null, 2)}\n`);
+
+  const port = await freePort();
+  const child = spawn(process.execPath, [
+    "local-server.mjs",
+    `--port=${port}`,
+    "--token=test-token",
+    `--settings-file=${settingsFile}`,
+    `--prompt-instructions-dir=${promptRoot}`,
+  ], { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
+  context.after(() => child.kill());
+  await once(child.stdout, "data");
+
+  const extension = new WebSocket(`ws://127.0.0.1:${port}/bridge?token=test-token`);
+  context.after(() => extension.close());
+  await new Promise((resolve, reject) => {
+    extension.addEventListener("open", resolve, { once: true });
+    extension.addEventListener("error", () => reject(new Error("Test extension WebSocket could not connect.")), { once: true });
+  });
+
+  const runs = [];
+  extension.addEventListener("message", (event) => {
+    const message = JSON.parse(event.data);
+    if (message.type !== "bridge:run") return;
+    runs.push({ provider: message.provider, prompt: message.prompt });
+    extension.send(JSON.stringify({ type: "bridge:complete", id: message.id, text: "ok" }));
+  });
+  extension.send(JSON.stringify({ type: "bridge:hello", version: "test", providers: ["qwen", "gemini"] }));
+
+  const qwen = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "bridge-qwen", messages: [{ role: "user", content: "qwen turn" }] }),
+  });
+  assert.equal(qwen.status, 200);
+  // Empty prePrompt is an explicit disable for this provider, not an inheritance of the global.
+  assert.deepEqual(runs.at(-1), { provider: "qwen", prompt: "USER:\nqwen turn\n\nQWEN ONLY" });
+
+  const gemini = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "bridge-gemini", messages: [{ role: "user", content: "gemini turn" }] }),
+  });
+  assert.equal(gemini.status, 200);
+  assert.deepEqual(runs.at(-1), { provider: "gemini", prompt: "GLOBAL PRE for Gemini\n\nUSER:\ngemini turn\n\nGLOBAL POST" });
+});
+
+test("rejects an unknown provider id in settings providers", async (context) => {
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "ai-bridge-badprovider-"));
+  context.after(async () => fs.rm(workspace, { recursive: true, force: true }));
+  const settingsFile = path.join(workspace, "ai-bridge.settings.json");
+  await fs.writeFile(settingsFile, `${JSON.stringify({ providers: { nonexistent: { prePrompt: "" } } }, null, 2)}\n`);
+
+  const port = await freePort();
+  const child = spawn(process.execPath, [
+    "local-server.mjs",
+    `--port=${port}`,
+    "--token=test-token",
+    `--settings-file=${settingsFile}`,
+  ], { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
+  context.after(() => child.kill());
+
+  let stderr = "";
+  child.stderr.on("data", (chunk) => { stderr += chunk; });
+  await once(child, "close");
+  assert.notEqual(child.exitCode, 0);
+  assert.match(stderr, /not a supported provider/);
+});
+
 async function startServerWithTokenFile(tokenFile) {
   const port = await freePort();
   const child = spawn(process.execPath, ["local-server.mjs", `--port=${port}`, "--token-file", tokenFile], { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] });

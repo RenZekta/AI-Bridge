@@ -160,16 +160,17 @@ function handleChatCompletion(request, response, payload) {
 
   const provider = providerForModel(payload.model);
   const tools = Array.isArray(payload.tools) ? payload.tools : [];
+  const promptSettings = resolvePromptSettings(provider);
   const prompt = buildPromptWithInstructions(
     formatPrompt(payload.messages, tools),
     payload.messages,
     provider,
     {
-      everyMessage: injectPromptInstructionsEveryMessage,
-      prePromptName,
-      postPromptName,
+      everyMessage: promptSettings.everyMessage,
+      prePromptName: promptSettings.prePromptName,
+      postPromptName: promptSettings.postPromptName,
       rootDirectory: promptInstructionsDir,
-      disguiseModelNameAsAssistant,
+      disguiseModelNameAsAssistant: promptSettings.disguiseModelNameAsAssistant,
     },
   );
   const job = {
@@ -661,6 +662,7 @@ function loadBridgeSettings(options) {
           ? parsed.disguiseModelNameAsAssistant
           : DEFAULT_BRIDGE_SETTINGS.disguiseModelNameAsAssistant,
       },
+      providerOverrides: readProviderOverrides(parsed, settingsPath),
     };
   } catch (error) {
     if (error?.code !== "ENOENT") throw new Error(`Could not load settings file at ${settingsPath}: ${error.message}`);
@@ -671,6 +673,8 @@ function loadBridgeSettings(options) {
       postPrompt: DEFAULT_BRIDGE_SETTINGS.postPrompt,
       "// disguiseModelNameAsAssistant": "Turning on may increase responsiveness of a model to the prompt",
       disguiseModelNameAsAssistant: DEFAULT_BRIDGE_SETTINGS.disguiseModelNameAsAssistant,
+      "// providers": "Per-provider overrides of prePrompt, postPrompt, injectPromptInstructionsEveryMessage and disguiseModelNameAsAssistant. An empty prePrompt or postPrompt disables it for that provider.",
+      providers: {},
     }, null, 2)}\n`;
     try {
       fs.writeFileSync(settingsPath, contents, { encoding: "utf8", flag: "wx" });
@@ -679,6 +683,53 @@ function loadBridgeSettings(options) {
     }
     return loadBridgeSettings({ "settings-file": settingsPath });
   }
+}
+
+// Prompt-shaping options that may differ per provider. interceptTitleRequests stays
+// global because it is decided before the provider is known.
+function readProviderOverrides(parsed, settingsPath) {
+  if (parsed.providers === undefined) return {};
+  if (!parsed.providers || Array.isArray(parsed.providers) || typeof parsed.providers !== "object") {
+    throw new Error(`'providers' in ${settingsPath} must be an object keyed by provider id`);
+  }
+  const overrides = {};
+  for (const [provider, raw] of Object.entries(parsed.providers)) {
+    if (!PROVIDERS.slice(1).includes(provider)) {
+      throw new Error(`'providers.${provider}' in ${settingsPath} is not a supported provider`);
+    }
+    if (!raw || Array.isArray(raw) || typeof raw !== "object") {
+      throw new Error(`'providers.${provider}' in ${settingsPath} must be an object`);
+    }
+    const override = {};
+    if (raw.injectPromptInstructionsEveryMessage !== undefined) {
+      if (typeof raw.injectPromptInstructionsEveryMessage !== "boolean") {
+        throw new Error(`'providers.${provider}.injectPromptInstructionsEveryMessage' must be a boolean`);
+      }
+      override.injectPromptInstructionsEveryMessage = raw.injectPromptInstructionsEveryMessage;
+    }
+    if (raw.prePrompt !== undefined) override.prePrompt = readOptionalSettingsString(raw.prePrompt, "", "prePrompt");
+    if (raw.postPrompt !== undefined) override.postPrompt = readOptionalSettingsString(raw.postPrompt, "", "postPrompt");
+    if (raw.disguiseModelNameAsAssistant !== undefined) {
+      if (typeof raw.disguiseModelNameAsAssistant !== "boolean") {
+        throw new Error(`'providers.${provider}.disguiseModelNameAsAssistant' must be a boolean`);
+      }
+      override.disguiseModelNameAsAssistant = raw.disguiseModelNameAsAssistant;
+    }
+    overrides[provider] = override;
+  }
+  return overrides;
+}
+
+// Provider-specific values win over the global ones. An empty prePrompt or postPrompt
+// is an explicit "off for this provider", so it must not fall back to the global name.
+function resolvePromptSettings(provider) {
+  const override = provider ? settingsConfig.providerOverrides[provider] ?? null : null;
+  return {
+    everyMessage: override?.injectPromptInstructionsEveryMessage ?? injectPromptInstructionsEveryMessage,
+    prePromptName: override?.prePrompt ?? prePromptName,
+    postPromptName: override?.postPrompt ?? postPromptName,
+    disguiseModelNameAsAssistant: override?.disguiseModelNameAsAssistant ?? disguiseModelNameAsAssistant,
+  };
 }
 
 function resolvePromptInstructionsDirectory(options, settingsPath) {

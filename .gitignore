@@ -2,3 +2,15 @@ node_modules/
 .env
 .ai-bridge-token
 npm-debug.log*
+
+# Bridge token files under any name (--token-file / BRIDGE_TOKEN_FILE)
+*.token
+.ai-bridge-token.*
+
+# Local browser profiles and scratch dirs used when testing the extension
+.test-profile/
+.test-profile-*/
+.audit/
+
+# Local runtime configuration; copy ai-bridge.settings.example.json to start
+ai-bridge.settings.json
