@@ -284,7 +284,7 @@ function renderCodeBlock(node) {
   const code = node.querySelector("code");
   if (code) {
     const source = code.textContent.replace(/^\n+|\n+$/g, "");
-    const language = [...code.classList].find((name) => name.startsWith("language-"))?.slice("language-".length) ?? "";
+    const language = languageFromCodeBlock(node, code);
     return `\n\n\`\`\`${language}\n${source}\n\`\`\`\n\n`;
   }
 
@@ -307,6 +307,18 @@ function renderCodeBlock(node) {
   // block taller than the viewport yields a truncated source here.
   const source = node.textContent.replace(/^\n+|\n+$/g, "");
   return `\n\n\`\`\`\n${source}\n\`\`\`\n\n`;
+}
+
+// Shiki keeps the language label in a header row above the code instead of a language-*
+// class on the code element. Arena marks the block with data-code-block and puts the
+// label in the header's first child; the copy button beside it is icon-only, so the
+// header's text is the label alone. The shape guard rejects anything that is not a
+// single identifier, so an unexpected header yields no language rather than prose.
+function languageFromCodeBlock(node, code) {
+  const fromClass = [...code.classList].find((name) => name.startsWith("language-"));
+  if (fromClass) return fromClass.slice("language-".length);
+  const label = node.querySelector("[data-code-block] > div")?.textContent?.trim() ?? "";
+  return /^[a-z][a-z0-9+#-]{0,15}$/i.test(label) ? label.toLowerCase() : "";
 }
 
 function renderList(list, ordered) {
