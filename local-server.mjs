@@ -16,6 +16,12 @@ import { makeAssistantMessage } from "./tool-calls.mjs";
 const MAX_BODY_BYTES = 1_000_000;
 const MAX_QUEUE_LENGTH = 10;
 const REQUEST_TIMEOUT_MS = 240_000;
+// A lane is one browser tab answering one prompt. One connected extension may host
+// several lanes at once; it reports bridge:busy when it has no free tab, and the
+// request goes back to the queue instead of failing.
+const MAX_CONCURRENT_PER_CLIENT = readPositiveInt(process.env.BRIDGE_MAX_CONCURRENT, 3);
+const MAX_BUSY_RETRIES = 3;
+const BUSY_RETRY_DELAY_MS = 1_500;
 const PROVIDERS = ["auto", "grok", "gemini", "deepseek", "perplexity", "qwen", "chatgpt", "claude", "zai", "kimi"];
 if (PROVIDERS.slice(1).some((provider) => !PROVIDER_DISPLAY_NAMES[provider])) {
   throw new Error("PROVIDER_DISPLAY_NAMES is missing a provider from PROVIDERS.");
@@ -43,7 +49,7 @@ const disguiseModelNameAsAssistant = settingsConfig.settings.disguiseModelNameAs
 const clients = new Set();
 const jobs = new Map();
 const queue = [];
-let activeJob = null;
+const activeJobs = new Set();
 
 const server = http.createServer(async (request, response) => {
   try {
@@ -62,8 +68,9 @@ const server = http.createServer(async (request, response) => {
       return sendJson(response, 200, {
         ok: true,
         connected_extensions: clients.size,
-        active_request: activeJob?.id ?? null,
+        active_requests: [...activeJobs].map((job) => job.id),
         queued_requests: queue.length,
+        max_concurrent_per_client: MAX_CONCURRENT_PER_CLIENT,
       });
     }
 
@@ -254,16 +261,29 @@ const TITLE_STOP_WORDS = new Set([
 ]);
 
 function dispatchNext() {
-  if (activeJob || queue.length === 0) return;
-  const job = queue.shift();
-  const client = selectClient(job.provider);
-  if (!client) {
-    finishJobWithError(job, "No suitable Chrome extension is connected.");
-    dispatchNext();
-    return;
-  }
+  const unassignable = queue.filter((job) => !hasCapableClient(job.provider));
+  for (const job of unassignable) finishJobWithError(job, "No suitable Chrome extension is connected.");
 
-  activeJob = job;
+  // Scan the queue rather than popping the head, so a job waiting on a busy provider
+  // does not block a job another provider could take immediately.
+  let dispatched = true;
+  while (dispatched && queue.length > 0) {
+    dispatched = false;
+    for (let index = 0; index < queue.length; index += 1) {
+      const job = queue[index];
+      const client = selectAvailableClient(job.provider);
+      if (!client) continue;
+      queue.splice(index, 1);
+      assignJob(job, client);
+      dispatched = true;
+      break;
+    }
+  }
+}
+
+function assignJob(job, client) {
+  activeJobs.add(job);
+  client.activeJobs.add(job.id);
   job.client = client;
   job.timer = setTimeout(() => finishJobWithError(job, "The web chat did not finish before the 4 minute bridge timeout."), REQUEST_TIMEOUT_MS);
   client.send({
@@ -272,6 +292,27 @@ function dispatchNext() {
     provider: job.provider,
     prompt: job.prompt,
   });
+}
+
+function releaseJob(job) {
+  activeJobs.delete(job);
+  if (job.client) job.client.activeJobs.delete(job.id);
+  job.client = null;
+}
+
+// The extension had no free tab for this provider. Requeue instead of failing: opening
+// another logged-in tab makes progress possible without the caller issuing a new call.
+function requeueBusyJob(job, message) {
+  clearTimeout(job.timer);
+  job.timer = null;
+  releaseJob(job);
+  job.busyAttempts = (job.busyAttempts ?? 0) + 1;
+  if (job.busyAttempts > MAX_BUSY_RETRIES) {
+    finishJobWithError(job, `${message} Open another logged-in tab for this provider, or lower BRIDGE_MAX_CONCURRENT.`);
+    return;
+  }
+  queue.push(job);
+  setTimeout(dispatchNext, BUSY_RETRY_DELAY_MS);
 }
 
 function handleExtensionMessage(client, message) {
@@ -306,6 +347,10 @@ function handleExtensionMessage(client, message) {
     finishJob(job);
     return;
   }
+  if (message.type === "bridge:busy") {
+    requeueBusyJob(job, typeof message.message === "string" ? message.message : "No AI chat tab is free.");
+    return;
+  }
   if (message.type === "bridge:error") {
     finishJobWithError(job, typeof message.message === "string" ? message.message : "The web chat page reported an unknown error.");
   }
@@ -316,7 +361,7 @@ function finishJob(job) {
   job.done = true;
   clearTimeout(job.timer);
   jobs.delete(job.id);
-  if (activeJob === job) activeJob = null;
+  releaseJob(job);
 
   if (job.stream) {
     finishStreamingJob(job);
@@ -366,7 +411,7 @@ function finishJobWithError(job, message) {
   jobs.delete(job.id);
   const queuedIndex = queue.indexOf(job);
   if (queuedIndex !== -1) queue.splice(queuedIndex, 1);
-  if (activeJob === job) activeJob = null;
+  releaseJob(job);
 
   if (job.stream) {
     writeSse(job.response, { error: { message, type: "bridge_error", code: "bridge_error" } });
@@ -445,10 +490,19 @@ function providerForModel(model) {
   return found ?? null;
 }
 
-function selectClient(provider) {
-  const available = [...clients].filter((client) => !client.closed);
-  if (!provider) return available.at(-1) ?? null;
-  return available.find((client) => client.providers.length === 0 || client.providers.includes(provider)) ?? null;
+function hasCapableClient(provider) {
+  return [...clients].some((client) => !client.closed
+    && (provider == null || client.providers.length === 0 || client.providers.includes(provider)));
+}
+
+// Load-balanced across lanes: prefer the connected extension with the fewest requests
+// already in flight, and never give one client more than MAX_CONCURRENT_PER_CLIENT.
+function selectAvailableClient(provider) {
+  const capable = [...clients].filter((client) => !client.closed
+    && client.activeJobs.size < MAX_CONCURRENT_PER_CLIENT
+    && (provider == null || client.providers.length === 0 || client.providers.includes(provider)));
+  if (capable.length === 0) return null;
+  return capable.sort((left, right) => left.activeJobs.size - right.activeJobs.size)[0];
 }
 
 function readJsonBody(request) {
@@ -479,6 +533,7 @@ function createWebSocketClient(socket) {
   const client = {
     socket,
     providers: [],
+    activeJobs: new Set(),
     buffer: Buffer.alloc(0),
     closed: false,
     onClose: null,
@@ -617,6 +672,13 @@ function parseArgs(values) {
 function readPort(value) {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) throw new Error("BRIDGE_PORT must be a valid TCP port.");
+  return parsed;
+}
+
+function readPositiveInt(value, fallback) {
+  if (value === undefined || value === "") return fallback;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isInteger(parsed) || parsed < 1) throw new Error("BRIDGE_MAX_CONCURRENT must be a positive integer.");
   return parsed;
 }
 

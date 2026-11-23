@@ -35,7 +35,7 @@ This project borrows the practical idea of a web-chat-to-OpenAI gateway from [ge
 4. Open the AI Bridge extension, paste the printed token, and click **Save & connect**.
 5. Click a provider in the popup, sign in normally, and leave that tab open. Choose it as the default provider, or use a provider-specific model name.
 
-The server binds only to `127.0.0.1`. It never reads, copies, or uploads Chrome profile files. Each request is serialised because a chat tab can answer only one prompt at a time. While connected, the extension exchanges a heartbeat every 20 seconds, so its Manifest V3 service worker remains active indefinitely on Chrome 116 or newer. The **Pause** button intentionally stops that connection; **Continue** restores it.
+The server binds only to `127.0.0.1`. It never reads, copies, or uploads Chrome profile files. A single chat tab answers one prompt at a time, but requests run **in parallel across tabs**: each request is leased to a free tab, and up to `BRIDGE_MAX_CONCURRENT` requests (default `3`) may be in flight per connected browser. When every matching tab is busy the request is requeued rather than failed, so opening another logged-in tab of the same provider increases throughput without changing your client. While connected, the extension exchanges a heartbeat every 20 seconds, so its Manifest V3 service worker remains active indefinitely on Chrome 116 or newer. The **Pause** button intentionally stops that connection; **Continue** restores it.
 
 After changing extension files during development, click the extension's **Reload** button on `chrome://extensions`. Restart `npm start` after changing the local server.
 
@@ -107,6 +107,8 @@ Set `interceptTitleRequests` to `false` to pass IDE conversation-naming calls th
 Set `disguiseModelNameAsAssistant` to `true` to always replace `{{modelName}}` with `an assistant` instead of the provider display name. Turning this on may increase responsiveness of a model to the prompt. Keys that start with `//` are comments and are ignored.
 
 **Per-provider overrides.** The optional `providers` object is keyed by provider id (`grok`, `gemini`, `deepseek`, `perplexity`, `qwen`, `chatgpt`, `claude`, `zai`, `kimi`). Each entry may override `prePrompt`, `postPrompt`, `injectPromptInstructionsEveryMessage` and `disguiseModelNameAsAssistant` for that provider only; anything omitted falls back to the global value. An empty `prePrompt` or `postPrompt` disables that side for the provider instead of inheriting the global name, which is how you turn the relay preamble off for one site only. `interceptTitleRequests` stays global because it is decided before the provider is known. Unknown provider ids and wrong value types are rejected at startup.
+
+Concurrency is controlled by the environment variable `BRIDGE_MAX_CONCURRENT` (default `3`): how many requests one connected browser may have in flight at once. Set it to `1` for strictly serial behaviour.
 
 ### Prompt instructions
 

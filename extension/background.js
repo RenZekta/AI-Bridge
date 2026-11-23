@@ -24,6 +24,9 @@ let heartbeatTimer = null;
 let socketState = "disconnected";
 let lastError = "";
 let closingForPause = false;
+// Bridge job id -> tab id. A tab answers one prompt at a time, so a leased tab is
+// skipped when choosing where to send the next request.
+const leases = new Map();
 
 chrome.runtime.onInstalled.addListener(async () => {
   const existing = await chrome.storage.local.get(DEFAULT_SETTINGS);
@@ -65,7 +68,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (message?.type === "bridge:site-message") {
     const provider = providerForUrl(sender.tab?.url);
-    sendToServer({ ...message.message, provider });
+    const payload = message.message;
+    if ((payload?.type === "bridge:complete" || payload?.type === "bridge:error") && typeof payload.id === "string") {
+      leases.delete(payload.id);
+    }
+    sendToServer({ ...payload, provider });
+  }
+});
+
+chrome.tabs.onRemoved.addListener((closedTabId) => {
+  for (const [jobId, leasedTabId] of [...leases]) {
+    if (leasedTabId === closedTabId) leases.delete(jobId);
   }
 });
 
@@ -107,6 +120,9 @@ async function connect(force = false) {
   socket.onopen = () => {
     socketState = "connected";
     lastError = "";
+    // The server fails every in-flight job when the socket drops, so any lease left
+    // over from the previous connection would permanently block that tab.
+    leases.clear();
     sendToServer({ type: "bridge:hello", version: chrome.runtime.getManifest().version, providers: Object.keys(PROVIDERS) });
     startHeartbeat();
     updateBadge();
@@ -169,33 +185,41 @@ function pauseBridge() {
 
 async function handleServerMessage(message) {
   if (message?.type !== "bridge:run" || typeof message.id !== "string") return;
-  const tab = await findTargetTab(message.provider);
+  const tab = await findTargetTab(message.provider, new Set(leases.values()));
   if (!tab?.id) {
-    sendToServer({
-      type: "bridge:error",
-      id: message.id,
-      message: message.provider
-        ? `Open a logged-in ${PROVIDERS[message.provider]?.label ?? message.provider} tab, then retry.`
-        : "Open a logged-in supported AI chat tab, then retry.",
-    });
+    const label = message.provider ? PROVIDERS[message.provider]?.label ?? message.provider : "supported AI chat";
+    // Distinguish "nothing to answer with" from "everything is busy": the second one is
+    // worth requeueing, the first only wastes a retry.
+    const anyTab = await findTargetTab(message.provider);
+    sendToServer(anyTab?.id
+      ? { type: "bridge:busy", id: message.id, message: `Every logged-in ${label} tab is already answering a request.` }
+      : { type: "bridge:error", id: message.id, message: message.provider ? `Open a logged-in ${label} tab, then retry.` : `Open a logged-in ${label} tab, then retry.` });
     return;
   }
+  leases.set(message.id, tab.id);
   try {
     await chrome.tabs.sendMessage(tab.id, { type: "bridge:run", id: message.id, prompt: message.prompt });
-    await chrome.tabs.update(tab.id, { active: true });
-    await chrome.windows.update(tab.windowId, { focused: true });
+    // Only claim the window when this is the only lane running; otherwise parallel
+    // requests would keep stealing focus from each other and from the user.
+    if (leases.size === 1) {
+      await chrome.tabs.update(tab.id, { active: true });
+      await chrome.windows.update(tab.windowId, { focused: true });
+    }
   } catch {
+    leases.delete(message.id);
     sendToServer({ type: "bridge:error", id: message.id, message: "The AI Bridge content script is not ready in the selected tab. Reload that tab and retry." });
   }
 }
 
-async function findTargetTab(requestedProvider) {
+async function findTargetTab(requestedProvider, excludeTabIds = new Set()) {
   const settings = await chrome.storage.local.get(DEFAULT_SETTINGS);
   const provider = requestedProvider || (settings.defaultProvider === "auto" ? null : settings.defaultProvider);
   const patterns = provider ? PROVIDERS[provider]?.matches : Object.values(PROVIDERS).flatMap((item) => item.matches);
   if (!patterns?.length) return null;
   const tabs = await chrome.tabs.query({ url: patterns });
-  return tabs.sort((left, right) => Number(Boolean(right.active)) - Number(Boolean(left.active)) || Number(Boolean(right.highlighted)) - Number(Boolean(left.highlighted)))[0] ?? null;
+  return tabs
+    .filter((tab) => !excludeTabIds.has(tab.id))
+    .sort((left, right) => Number(Boolean(right.active)) - Number(Boolean(left.active)) || Number(Boolean(right.highlighted)) - Number(Boolean(left.highlighted)))[0] ?? null;
 }
 
 function sendToServer(message) {

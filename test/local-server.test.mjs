@@ -17,6 +17,35 @@ async function freePort() {
   return port;
 }
 
+async function waitForCondition(predicate, timeoutMs = 5000) {
+  const started = Date.now();
+  while (!predicate()) {
+    if (Date.now() - started > timeoutMs) throw new Error("Timed out waiting for condition.");
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
+async function startBridgeServer({ port, settingsFile, env }) {
+  const child = spawn(process.execPath, [
+    "local-server.mjs",
+    `--port=${port}`,
+    "--token=test-token",
+    `--settings-file=${settingsFile}`,
+  ], { cwd: process.cwd(), env: { ...process.env, ...env }, stdio: ["ignore", "pipe", "pipe"] });
+  await once(child.stdout, "data");
+  return child;
+}
+
+async function connectTestExtension(port, providers) {
+  const extension = new WebSocket(`ws://127.0.0.1:${port}/bridge?token=test-token`);
+  await new Promise((resolve, reject) => {
+    extension.addEventListener("open", resolve, { once: true });
+    extension.addEventListener("error", () => reject(new Error("Test extension WebSocket could not connect.")), { once: true });
+  });
+  extension.send(JSON.stringify({ type: "bridge:hello", version: "test", providers }));
+  return extension;
+}
+
 test("serves the local OpenAI discovery and unavailable-bridge contracts", async (context) => {
   const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "ai-bridge-server-"));
   context.after(async () => fs.rm(workspace, { recursive: true, force: true }));
@@ -375,6 +404,100 @@ test("rejects an unknown provider id in settings providers", async (context) => 
   await once(child, "close");
   assert.notEqual(child.exitCode, 0);
   assert.match(stderr, /not a supported provider/);
+});
+
+test("dispatches to several free lanes at the same time", async (context) => {
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "ai-bridge-parallel-"));
+  context.after(async () => fs.rm(workspace, { recursive: true, force: true }));
+  const settingsFile = path.join(workspace, "ai-bridge.settings.json");
+  await fs.writeFile(settingsFile, `${JSON.stringify({
+    interceptTitleRequests: false,
+    injectPromptInstructionsEveryMessage: false,
+    prePrompt: "",
+    postPrompt: "",
+  }, null, 2)}\n`);
+
+  const port = await freePort();
+  const child = await startBridgeServer({ port, settingsFile, env: { BRIDGE_MAX_CONCURRENT: "3" } });
+  context.after(() => child.kill());
+
+  const extension = await connectTestExtension(port, ["qwen", "gemini"]);
+  context.after(() => extension.close());
+
+  const runs = [];
+  extension.addEventListener("message", (event) => {
+    const message = JSON.parse(event.data);
+    if (message.type === "bridge:run") runs.push(message);
+  });
+
+  const qwen = fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "bridge-qwen", messages: [{ role: "user", content: "first" }] }),
+  }).then((response) => response.json());
+  const gemini = fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "bridge-gemini", messages: [{ role: "user", content: "second" }] }),
+  }).then((response) => response.json());
+
+  // Nothing has been completed yet, so two runs in flight proves they were not serialised.
+  await waitForCondition(() => runs.length === 2);
+  assert.deepEqual(runs.map((run) => run.provider).sort(), ["gemini", "qwen"]);
+
+  for (const run of runs) {
+    extension.send(JSON.stringify({ type: "bridge:complete", id: run.id, text: `answer to ${run.provider}` }));
+  }
+  assert.equal((await qwen).choices[0].message.content, "answer to qwen");
+  assert.equal((await gemini).choices[0].message.content, "answer to gemini");
+});
+
+test("honours BRIDGE_MAX_CONCURRENT=1 by serialising requests", async (context) => {
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "ai-bridge-serial-"));
+  context.after(async () => fs.rm(workspace, { recursive: true, force: true }));
+  const settingsFile = path.join(workspace, "ai-bridge.settings.json");
+  await fs.writeFile(settingsFile, `${JSON.stringify({
+    interceptTitleRequests: false,
+    injectPromptInstructionsEveryMessage: false,
+    prePrompt: "",
+    postPrompt: "",
+  }, null, 2)}\n`);
+
+  const port = await freePort();
+  const child = await startBridgeServer({ port, settingsFile, env: { BRIDGE_MAX_CONCURRENT: "1" } });
+  context.after(() => child.kill());
+
+  const extension = await connectTestExtension(port, ["qwen", "gemini"]);
+  context.after(() => extension.close());
+
+  const runs = [];
+  extension.addEventListener("message", (event) => {
+    const message = JSON.parse(event.data);
+    if (message.type === "bridge:run") runs.push(message);
+  });
+
+  const qwen = fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "bridge-qwen", messages: [{ role: "user", content: "first" }] }),
+  }).then((response) => response.json());
+  await waitForCondition(() => runs.length === 1);
+
+  const gemini = fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "bridge-gemini", messages: [{ role: "user", content: "second" }] }),
+  }).then((response) => response.json());
+
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(runs.length, 1, "second request must wait for the single lane");
+
+  extension.send(JSON.stringify({ type: "bridge:complete", id: runs[0].id, text: "first done" }));
+  await waitForCondition(() => runs.length === 2);
+  extension.send(JSON.stringify({ type: "bridge:complete", id: runs[1].id, text: "second done" }));
+
+  assert.equal((await qwen).choices[0].message.content, "first done");
+  assert.equal((await gemini).choices[0].message.content, "second done");
 });
 
 async function startServerWithTokenFile(tokenFile) {
