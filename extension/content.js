@@ -57,12 +57,24 @@ const SITE_CONFIG = {
     output: ["[class*='markdown']", "[class*='message-content']", ".markdown-body"],
   },
   arena: {
-    // Unverified against the live site. The output selector is the risky one: if it also
-    // matches the user's own turn, the bridge silently returns the prompt instead of the
-    // reply. Confirm the composer and the assistant-turn container in the real DOM before
-    // relying on this adapter.
-    input: ["[contenteditable='true'][role='textbox']", "textarea", "[contenteditable='true']"],
-    output: ["[class*='markdown']"],
+    // Composer verified against the live DOM: a Tiptap/ProseMirror editor with no role
+    // attribute and no textarea, so the class is the only reliable handle. The send
+    // control does not appear until the composer has text.
+    // Agent mode and chat mode use different turn components in opposite DOM orders, so
+    // each output entry names which end of the match list holds the newest turn.
+    // Agent mode tags every turn data-agent-transcript-message and marks the user's turn
+    // data-user-message-body-row. Chat mode has no turn attributes: its transcript is an
+    // ol laid out flex-col-reverse, the user's row is the one with justify-end, and a
+    // collapsed thinking block carries its own div.prose that must not be read as the
+    // answer.
+    input: [".editor-content .tiptap.ProseMirror", "[contenteditable='true']"],
+    output: [
+      "[data-agent-transcript-message]:not(:has([data-user-message-body-row]))",
+      {
+        selector: "ol[data-perf-target='transcript'] > div:not([class*='justify-end']) div.prose:not([data-state] *)",
+        newestFirst: true,
+      },
+    ],
   },
 };
 
@@ -172,9 +184,10 @@ async function streamLatestResponse(id, config, beforeText) {
 
 function latestResponseText(config) {
   if (config.extractor === "claude") return latestClaudeResponseText();
-  for (const selector of config.output) {
+  for (const entry of config.output) {
+    const { selector, newestFirst } = typeof entry === "string" ? { selector: entry } : entry;
     const matches = [...document.querySelectorAll(selector)].filter(isVisible).map(markdownFromElement);
-    const text = matches.at(-1);
+    const text = newestFirst ? matches.find(Boolean) : matches.at(-1);
     if (text) return text;
   }
   return "";

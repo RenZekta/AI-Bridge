@@ -141,7 +141,7 @@ than intended.
 ## Adapter conventions
 
 - Per-provider behaviour belongs in that provider's `SITE_CONFIG` entry, using the
-  existing optional fields (`extractor`, `streamFinalOnly`), not in a
+  existing optional fields (`extractor`, `streamFinalOnly`, `newestFirst`), not in a
   `if (PROVIDER === "...")` branch inside shared code.
 - A selector that matches nothing is worse than no selector: it looks configured and
   behaves as a fallback. If a provider-specific selector cannot be verified, say so
