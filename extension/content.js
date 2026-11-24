@@ -63,7 +63,9 @@ const SITE_CONFIG = {
     // Agent mode and chat mode use different turn components in opposite DOM orders, so
     // each output entry names which end of the match list holds the newest turn.
     // Agent mode tags every turn data-agent-transcript-message and marks the user's turn
-    // data-user-message-body-row. Chat mode has no turn attributes: its transcript is an
+    // data-user-message-body-row. That mode is marked coming soon on the site, so its
+    // entry comes from a DOM dump and has not been exercised by a real request.
+    // Chat mode has no turn attributes: its transcript is an
     // ol laid out flex-col-reverse, the user's row is the one with justify-end, and a
     // collapsed thinking block carries its own div.prose that must not be read as the
     // answer.

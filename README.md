@@ -17,7 +17,7 @@ IDE / agent ──HTTP──> 127.0.0.1:4317/v1 ──WebSocket──> Chrome ex
 - [Claude](https://claude.ai/)
 - [Z.ai](https://chat.z.ai/)
 - [Kimi](https://www.kimi.com/)
-- [Arena](https://arena.ai/) — **experimental**: verified in chat mode with a single model selected. The bridge does not choose models, and Agent mode has no model picker, so chat mode is the only place you control which model answers. Side-by-side mode returns two answers per turn and is not supported.
+- [Arena](https://arena.ai/) — **experimental**: verified in chat mode with a single model selected. The bridge does not choose models, so chat mode is where you control which model answers. Agent mode is marked coming soon and has no model picker yet. Side-by-side mode returns two answers per turn and is not supported.
 
 This project borrows the practical idea of a web-chat-to-OpenAI gateway from [geminiweb-as-api](https://github.com/hieonn/geminiweb-as-api) and the extension-first direction of [Quarkonix](https://github.com/nikita-nikita12308/Quarkonix), without copying browser profiles or exposing a remote server.
 
