@@ -100,6 +100,7 @@ async function runRequest({ id, prompt }) {
     const previousText = latestResponseText(config);
     const composer = findVisible(config.input);
     if (!composer) throw new Error("Could not find the chat composer. Make sure the page is fully loaded and you are signed in.");
+    if (isCovered(composer)) throw new Error("Something is covering the chat composer, usually a verification or consent dialog. Dismiss it in the browser and retry.");
     setComposerText(composer, resolvePromptModelName(prompt));
     await delay(80);
     if (!clickSendButton()) {
@@ -372,6 +373,20 @@ const CHALLENGE_PAGE_MARKERS = "#challenge-form, .cf-turnstile, #cf-chl-widget, 
 
 function isChallengePage() {
   return Boolean(document.querySelector(CHALLENGE_PAGE_MARKERS)) || /^just a moment\.\.\.$/i.test(document.title.trim());
+}
+
+// A composer that exists but is covered cannot be used, and verification dialogs, consent
+// banners and update prompts all leave the page looking ready. Inspecting the composer
+// proves nothing, so ask what the browser would actually deliver a click to.
+function isCovered(element) {
+  const rect = element.getBoundingClientRect();
+  const left = Math.max(rect.left, 0);
+  const top = Math.max(rect.top, 0);
+  const right = Math.min(rect.right, window.innerWidth);
+  const bottom = Math.min(rect.bottom, window.innerHeight);
+  if (right - left < 8 || bottom - top < 8) return false;
+  const hit = document.elementFromPoint((left + right) / 2, (top + bottom) / 2);
+  return hit !== null && !element.contains(hit) && !hit.contains(element);
 }
 
 function findVisible(selectors) {
